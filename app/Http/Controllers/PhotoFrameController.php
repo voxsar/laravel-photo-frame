@@ -6,6 +6,7 @@ use App\Models\FrameOutput;
 use App\Services\PhotoFrameService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -32,13 +33,34 @@ class PhotoFrameController extends Controller
             return response()->json(['error' => $e->getMessage()], 422);
         }
 
+        return response()->json($this->formatOutput($output));
+    }
+
+    /**
+     * List generated outputs from newest to oldest with pagination.
+     */
+    public function outputs(Request $request): JsonResponse
+    {
+        $perPage = max(1, min((int) $request->integer('per_page', 6), 24));
+
+        $paginator = FrameOutput::query()
+            ->with('photoFrame:id,name')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->paginate($perPage);
+
         return response()->json([
-            'id'               => $output->id,
-            'original_filename' => $output->original_filename,
-            'fill_url'         => Storage::disk('spaces')->url($output->fill_path),
-            'contain_url'      => Storage::disk('spaces')->url($output->contain_path),
-            'fill_download_url' => url("/api/frame-outputs/{$output->id}/download/fill"),
-            'contain_download_url' => url("/api/frame-outputs/{$output->id}/download/contain"),
+            'data' => $paginator->getCollection()
+                ->map(fn (FrameOutput $output) => $this->formatOutput($output))
+                ->values(),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+                'from' => $paginator->firstItem(),
+                'to' => $paginator->lastItem(),
+            ],
         ]);
     }
 
@@ -100,5 +122,24 @@ class PhotoFrameController extends Controller
                     : null,
             ],
         ]);
+    }
+
+    private function formatOutput(FrameOutput $output): array
+    {
+        $output->loadMissing('photoFrame:id,name');
+
+        return [
+            'id' => $output->id,
+            'original_filename' => $output->original_filename,
+            'photo_frame_name' => $output->photoFrame?->name,
+            'created_at' => $output->created_at,
+            'created_at_human' => $output->created_at
+                ? Date::parse($output->created_at)->diffForHumans()
+                : null,
+            'fill_url' => Storage::disk('spaces')->url($output->fill_path),
+            'contain_url' => Storage::disk('spaces')->url($output->contain_path),
+            'fill_download_url' => url("/api/frame-outputs/{$output->id}/download/fill"),
+            'contain_download_url' => url("/api/frame-outputs/{$output->id}/download/contain"),
+        ];
     }
 }

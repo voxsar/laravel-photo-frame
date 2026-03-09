@@ -38,16 +38,11 @@
             @change="onFileSelect"
         />
 
-        <div class="actions">
-            <button
-                class="btn btn--primary"
-                :disabled="!selectedFile || isProcessing"
-                @click="processImage"
-            >
-                <span v-if="isProcessing">Processing…</span>
-                <span v-else>Apply Frame</span>
-            </button>
-        </div>
+        <p class="auto-trigger-note">
+            Frame generation starts automatically once your upload is selected.
+        </p>
+
+        <div v-if="isProcessing" class="processing-status">Processing your image…</div>
 
         <div v-if="error" class="alert alert--error">{{ error }}</div>
 
@@ -65,6 +60,44 @@
                     <img :src="results.contain_url" alt="Contain output" />
                     <a :href="results.contain_download_url" target="_blank" rel="noopener" class="btn btn--secondary">Download</a>
                 </div>
+            </div>
+        </div>
+
+        <div class="history">
+            <div class="history__header">
+                <h2>Past Entries</h2>
+                <button class="btn btn--secondary" :disabled="historyLoading" @click="fetchOutputs(currentPage)">
+                    Refresh
+                </button>
+            </div>
+
+            <div v-if="historyLoading" class="history__loading">Loading entries…</div>
+
+            <div v-else-if="historyItems.length" class="history__list">
+                <article v-for="item in historyItems" :key="item.id" class="history-item">
+                    <img :src="item.fill_url" :alt="`Output ${item.id}`" class="history-item__thumb" />
+                    <div class="history-item__meta">
+                        <p><strong>{{ item.original_filename }}</strong></p>
+                        <p v-if="item.photo_frame_name">Frame: {{ item.photo_frame_name }}</p>
+                        <p>{{ item.created_at_human || item.created_at }}</p>
+                    </div>
+                    <div class="history-item__actions">
+                        <a :href="item.fill_download_url" target="_blank" rel="noopener" class="btn btn--secondary">Fill</a>
+                        <a :href="item.contain_download_url" target="_blank" rel="noopener" class="btn btn--secondary">Contain</a>
+                    </div>
+                </article>
+            </div>
+
+            <p v-else class="history__empty">No entries yet. Upload your first image to get started.</p>
+
+            <div v-if="lastPage > 1" class="history__pagination">
+                <button class="btn btn--secondary" :disabled="currentPage <= 1 || historyLoading" @click="fetchOutputs(currentPage - 1)">
+                    Previous
+                </button>
+                <span>Page {{ currentPage }} of {{ lastPage }}</span>
+                <button class="btn btn--secondary" :disabled="currentPage >= lastPage || historyLoading" @click="fetchOutputs(currentPage + 1)">
+                    Next
+                </button>
             </div>
         </div>
     </div>
@@ -86,11 +119,17 @@ export default {
             error: null,
             activeFrame: null,
             frameLoaded: false,
+            historyItems: [],
+            historyLoading: false,
+            currentPage: 1,
+            lastPage: 1,
+            fetchToken: 0,
         };
     },
 
     mounted() {
         this.loadActiveFrame();
+        this.fetchOutputs(1);
     },
 
     methods: {
@@ -121,6 +160,7 @@ export default {
             this.results = null;
             this.selectedFile = file;
             this.preview = URL.createObjectURL(file);
+            this.processImage();
         },
 
         reset() {
@@ -130,6 +170,34 @@ export default {
             this.error = null;
             if (this.$refs.fileInput) {
                 this.$refs.fileInput.value = '';
+            }
+        },
+
+        async fetchOutputs(page = 1) {
+            this.historyLoading = true;
+            const token = ++this.fetchToken;
+
+            try {
+                const { data } = await axios.get('/api/frame-outputs', {
+                    params: {
+                        page,
+                        per_page: 6,
+                    },
+                });
+
+                if (token !== this.fetchToken) return;
+
+                this.historyItems = data.data ?? [];
+                this.currentPage = data.meta?.current_page ?? 1;
+                this.lastPage = data.meta?.last_page ?? 1;
+            } catch (e) {
+                if (!this.error) {
+                    this.error = 'Could not load past entries.';
+                }
+            } finally {
+                if (token === this.fetchToken) {
+                    this.historyLoading = false;
+                }
             }
         },
 
@@ -149,6 +217,7 @@ export default {
                 });
 
                 this.results = data;
+                this.fetchOutputs(1);
             } catch (e) {
                 this.error =
                     e.response?.data?.error ||
@@ -245,10 +314,18 @@ export default {
     display: none;
 }
 
-.actions {
-    display: flex;
-    justify-content: center;
-    margin-top: 1.5rem;
+.auto-trigger-note {
+    margin-top: 1rem;
+    text-align: center;
+    color: #4a5568;
+    font-size: 0.95rem;
+}
+
+.processing-status {
+    margin-top: 1rem;
+    text-align: center;
+    color: #2b6cb0;
+    font-weight: 600;
 }
 
 .btn {
@@ -337,5 +414,88 @@ export default {
     border-radius: 0.375rem;
     margin-bottom: 0.75rem;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.history {
+    margin-top: 2.5rem;
+}
+
+.history__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    gap: 0.75rem;
+}
+
+.history__header h2 {
+    margin: 0;
+}
+
+.history__loading,
+.history__empty {
+    text-align: center;
+    color: #4a5568;
+    margin: 1rem 0;
+}
+
+.history__list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.history-item {
+    display: grid;
+    grid-template-columns: 96px 1fr auto;
+    gap: 0.9rem;
+    align-items: center;
+    padding: 0.85rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    background: #fff;
+}
+
+.history-item__thumb {
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
+    border-radius: 0.5rem;
+}
+
+.history-item__meta p {
+    margin: 0.2rem 0;
+    color: #2d3748;
+}
+
+.history-item__actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.history__pagination {
+    margin-top: 1rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+@media (max-width: 640px) {
+    .history-item {
+        grid-template-columns: 1fr;
+    }
+
+    .history-item__thumb {
+        width: 100%;
+        height: auto;
+        max-height: 220px;
+    }
+
+    .history-item__actions {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
 }
 </style>
