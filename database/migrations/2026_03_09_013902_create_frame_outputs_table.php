@@ -13,11 +13,13 @@ return new class extends Migration
     {
         Schema::create('frame_outputs', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('photo_frame_id')->constrained()->cascadeOnDelete();
+            $table->unsignedBigInteger('photo_frame_id');
             $table->string('original_filename');
             $table->string('fill_path')->nullable();
             $table->string('contain_path')->nullable();
             $table->timestamps();
+
+            $table->index('photo_frame_id');
         });
     }
 

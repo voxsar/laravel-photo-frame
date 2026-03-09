@@ -22,3 +22,4 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 // Photo frame public API
 Route::get('/active-frame', [PhotoFrameController::class, 'activeFrame']);
 Route::post('/process-image', [PhotoFrameController::class, 'process']);
+Route::get('/frame-outputs/{frameOutput}/download/{variant}', [PhotoFrameController::class, 'download']);

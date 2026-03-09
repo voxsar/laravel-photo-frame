@@ -58,12 +58,12 @@
                 <div class="result-card">
                     <h3>Fill (Cover)</h3>
                     <img :src="results.fill_url" alt="Fill output" />
-                    <a :href="results.fill_url" download class="btn btn--secondary">Download</a>
+                    <a :href="results.fill_download_url" target="_blank" rel="noopener" class="btn btn--secondary">Download</a>
                 </div>
                 <div class="result-card">
                     <h3>Contain</h3>
                     <img :src="results.contain_url" alt="Contain output" />
-                    <a :href="results.contain_url" download class="btn btn--secondary">Download</a>
+                    <a :href="results.contain_download_url" target="_blank" rel="noopener" class="btn btn--secondary">Download</a>
                 </div>
             </div>
         </div>
