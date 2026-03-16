@@ -103,6 +103,37 @@ class PhotoFrameTest extends TestCase
     }
 
     /** @test */
+    public function frame_image_endpoint_returns_404_when_no_active_frame(): void
+    {
+        Storage::fake('spaces');
+
+        $response = $this->get('/api/frame-image');
+
+        $response->assertNotFound();
+    }
+
+    /** @test */
+    public function frame_image_endpoint_returns_frame_png_for_active_frame(): void
+    {
+        Storage::fake('spaces');
+
+        $framePng = $this->createPng(100, 100);
+        Storage::disk('spaces')->put('frames/frame.png', $framePng);
+
+        PhotoFrame::create([
+            'name'         => 'Test Frame',
+            'frame_path'   => 'frames/frame.png',
+            'is_active'    => true,
+            'anchor_point' => 'center',
+        ]);
+
+        $response = $this->get('/api/frame-image');
+
+        $response->assertOk()
+            ->assertHeader('Content-Type', 'image/png');
+    }
+
+    /** @test */
     public function photo_frame_model_anchor_points_returns_expected_keys(): void
     {
         $keys = array_keys(PhotoFrame::anchorPoints());

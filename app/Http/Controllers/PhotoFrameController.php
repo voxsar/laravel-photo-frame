@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PhotoFrameController extends Controller
@@ -99,6 +100,30 @@ class PhotoFrameController extends Controller
         }, $downloadName, [
             'Content-Type' => $mimeType,
         ]);
+    }
+
+    /**
+     * Proxy the active frame image from Spaces so the browser can draw it on a
+     * Canvas without cross-origin restrictions tainting the canvas.
+     */
+    public function frameImage(): Response
+    {
+        $frame = \App\Models\PhotoFrame::where('is_active', true)->first();
+
+        if (! $frame || ! $frame->frame_path) {
+            abort(404, 'No active frame');
+        }
+
+        if (! Storage::disk('spaces')->exists($frame->frame_path)) {
+            abort(404, 'Frame image not found');
+        }
+
+        $content = Storage::disk('spaces')->get($frame->frame_path);
+        $mime    = Storage::disk('spaces')->mimeType($frame->frame_path) ?: 'image/png';
+
+        return response($content, 200)
+            ->header('Content-Type', $mime)
+            ->header('Cache-Control', 'public, max-age=3600');
     }
 
     /**
