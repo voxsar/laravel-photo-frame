@@ -1,5 +1,10 @@
 <template>
     <div class="photo-frame-app">
+        <nav class="app-nav">
+            <a href="/" class="nav-link nav-link--active">Single Image</a>
+            <a href="/batch" class="nav-link">Batch Processing</a>
+        </nav>
+
         <h1 class="title">Photo Frame</h1>
 
         <div v-if="activeFrame" class="frame-info">
@@ -39,10 +44,10 @@
         />
 
         <p class="auto-trigger-note">
-            Frame generation starts automatically once your upload is selected.
+            Frame is applied instantly in your browser once an image is selected.
         </p>
 
-        <div v-if="isProcessing" class="processing-status">Processing your image…</div>
+        <div v-if="isProcessing" class="processing-status">Applying frame…</div>
 
         <div v-if="error" class="alert alert--error">{{ error }}</div>
 
@@ -52,13 +57,13 @@
             <div class="results__grid">
                 <div class="result-card">
                     <h3>Fill (Cover)</h3>
-                    <img :src="results.fill_url" alt="Fill output" />
-                    <a :href="results.fill_download_url" target="_blank" rel="noopener" class="btn btn--secondary">Download</a>
+                    <img :src="results.coverUrl" alt="Fill output" />
+                    <button class="btn btn--secondary" @click="downloadResult('cover')">Download</button>
                 </div>
                 <div class="result-card">
                     <h3>Contain</h3>
-                    <img :src="results.contain_url" alt="Contain output" />
-                    <a :href="results.contain_download_url" target="_blank" rel="noopener" class="btn btn--secondary">Download</a>
+                    <img :src="results.containUrl" alt="Contain output" />
+                    <button class="btn btn--secondary" @click="downloadResult('contain')">Download</button>
                 </div>
             </div>
         </div>
@@ -88,7 +93,7 @@
                 </article>
             </div>
 
-            <p v-else class="history__empty">No entries yet. Upload your first image to get started.</p>
+            <p v-else class="history__empty">No entries yet.</p>
 
             <div v-if="lastPage > 1" class="history__pagination">
                 <button class="btn btn--secondary" :disabled="currentPage <= 1 || historyLoading" @click="fetchOutputs(currentPage - 1)">
@@ -105,6 +110,7 @@
 
 <script>
 import axios from 'axios';
+import { applyCover, applyContain, downloadBlob } from '../frameProcessor.js';
 
 export default {
     name: 'PhotoFrameApp',
@@ -119,6 +125,8 @@ export default {
             error: null,
             activeFrame: null,
             frameLoaded: false,
+            frameImg: null,
+            frameObjectUrl: null,
             historyItems: [],
             historyLoading: false,
             currentPage: 1,
@@ -132,15 +140,51 @@ export default {
         this.fetchOutputs(1);
     },
 
+    unmounted() {
+        this.revokeResultUrls();
+        if (this.frameObjectUrl) URL.revokeObjectURL(this.frameObjectUrl);
+    },
+
     methods: {
         async loadActiveFrame() {
             try {
                 const { data } = await axios.get('/api/active-frame');
                 this.activeFrame = data.frame;
+
+                if (this.activeFrame) {
+                    await this.loadFrameImage();
+                }
             } catch (e) {
                 console.error('Could not load active frame', e);
             } finally {
                 this.frameLoaded = true;
+            }
+        },
+
+        async loadFrameImage() {
+            try {
+                // Fetch the frame image via the same-origin proxy so the Canvas
+                // does not become tainted by cross-origin content.
+                const response = await fetch('/api/frame-image');
+                if (!response.ok) throw new Error('Frame image not available');
+                const blob = await response.blob();
+
+                // Revoke any previously held object URL before creating a new one.
+                if (this.frameObjectUrl) URL.revokeObjectURL(this.frameObjectUrl);
+                const objectUrl = URL.createObjectURL(blob);
+                this.frameObjectUrl = objectUrl;
+
+                await new Promise((resolve, reject) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        this.frameImg = img;
+                        resolve();
+                    };
+                    img.onerror = reject;
+                    img.src = objectUrl;
+                });
+            } catch (e) {
+                console.error('Could not load frame image', e);
             }
         },
 
@@ -157,6 +201,7 @@ export default {
 
         setFile(file) {
             this.error = null;
+            this.revokeResultUrls();
             this.results = null;
             this.selectedFile = file;
             this.preview = URL.createObjectURL(file);
@@ -164,6 +209,7 @@ export default {
         },
 
         reset() {
+            this.revokeResultUrls();
             this.selectedFile = null;
             this.preview = null;
             this.results = null;
@@ -173,23 +219,27 @@ export default {
             }
         },
 
+        revokeResultUrls() {
+            if (this.results) {
+                if (this.results.coverUrl)   URL.revokeObjectURL(this.results.coverUrl);
+                if (this.results.containUrl) URL.revokeObjectURL(this.results.containUrl);
+            }
+        },
+
         async fetchOutputs(page = 1) {
             this.historyLoading = true;
             const token = ++this.fetchToken;
 
             try {
                 const { data } = await axios.get('/api/frame-outputs', {
-                    params: {
-                        page,
-                        per_page: 6,
-                    },
+                    params: { page, per_page: 6 },
                 });
 
                 if (token !== this.fetchToken) return;
 
                 this.historyItems = data.data ?? [];
-                this.currentPage = data.meta?.current_page ?? 1;
-                this.lastPage = data.meta?.last_page ?? 1;
+                this.currentPage  = data.meta?.current_page ?? 1;
+                this.lastPage     = data.meta?.last_page ?? 1;
             } catch (e) {
                 if (!this.error) {
                     this.error = 'Could not load past entries.';
@@ -204,27 +254,44 @@ export default {
         async processImage() {
             if (!this.selectedFile) return;
 
+            if (!this.frameImg) {
+                this.error = 'Frame image is not loaded yet. Please wait and try again.';
+                return;
+            }
+
             this.isProcessing = true;
             this.error = null;
-            this.results = null;
 
             try {
-                const formData = new FormData();
-                formData.append('image', this.selectedFile);
+                const anchor = this.activeFrame?.anchor_point ?? 'center';
 
-                const { data } = await axios.post('/api/process-image', formData, {
-                    headers: { 'Content-Type': 'multipart/form-data' },
-                });
+                const [coverBlob, containBlob] = await Promise.all([
+                    applyCover(this.selectedFile, this.frameImg, anchor),
+                    applyContain(this.selectedFile, this.frameImg),
+                ]);
 
-                this.results = data;
-                this.fetchOutputs(1);
+                this.results = {
+                    coverBlob,
+                    containBlob,
+                    coverUrl:   URL.createObjectURL(coverBlob),
+                    containUrl: URL.createObjectURL(containBlob),
+                };
             } catch (e) {
-                this.error =
-                    e.response?.data?.error ||
-                    e.response?.data?.message ||
-                    'An unexpected error occurred. Please try again.';
+                this.error = e.message || 'An unexpected error occurred. Please try again.';
             } finally {
                 this.isProcessing = false;
+            }
+        },
+
+        downloadResult(variant) {
+            if (!this.results || !this.selectedFile) return;
+
+            const baseName = this.selectedFile.name.replace(/\.[^.]+$/, '');
+
+            if (variant === 'cover') {
+                downloadBlob(this.results.coverBlob, `${baseName}_fill.jpg`);
+            } else {
+                downloadBlob(this.results.containBlob, `${baseName}_contain.png`);
             }
         },
     },
@@ -238,6 +305,39 @@ export default {
     padding: 2rem 1rem;
     font-family: system-ui, -apple-system, sans-serif;
     color: #1a202c;
+}
+
+.app-nav {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 0.75rem;
+}
+
+.nav-link {
+    padding: 0.4rem 1rem;
+    border-radius: 0.375rem;
+    font-weight: 600;
+    font-size: 0.95rem;
+    text-decoration: none;
+    color: #4a5568;
+    transition: background 0.15s, color 0.15s;
+}
+
+.nav-link:hover {
+    background: #edf2f7;
+    color: #2d3748;
+}
+
+.nav-link--active {
+    background: #4299e1;
+    color: #fff;
+}
+
+.nav-link--active:hover {
+    background: #3182ce;
+    color: #fff;
 }
 
 .title {
@@ -361,6 +461,11 @@ export default {
 
 .btn--secondary:hover {
     background: #cbd5e0;
+}
+
+.btn--secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .alert {
